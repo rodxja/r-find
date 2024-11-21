@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "loginfo.h": "c",
+        "functions.h": "c",
+        "string.h": "c",
+        "stdlib.h": "c",
+        "stdio.h": "c",
+        "in.h": "c",
+        "netdb.h": "c"
+    }
+}
