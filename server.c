@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <stdlib.h>
+#include <sys/stat.h>
 
 // thread
 #include <pthread.h>
@@ -29,7 +30,8 @@
 int clients[MAX_CLIENTS];
 int numClients = 0;
 
-void searchFiles(const char *dir, const char *regex, int clientSocket);
+
+char **searchFiles(const char *dir, const char *regex, int *matchedFiles);
 void send_file(int client_socket, char *filename);
 char *extract_path_parameter(const char *uri, char *parameterName);
 void paths(int client_socket, const char *uri);
@@ -189,86 +191,100 @@ void paths(int client_socket, const char *uri)
 
     char *dir = extract_path_parameter(uri, "dir");
     char *regex = extract_path_parameter(uri, "regex");
-
+    
+    // TODO: Hay que quitar el client_socket por que lo que me va a devolver es una lista de archivos 
     searchFiles(dir, regex, client_socket);
+    // llamar a sendFiles
 }
 
+// TODO: Esa va a llamar searchFile para obtener la lista de archivos y luego esta lo llama a sendFiles
 void files(int client_socket, const char *uri)
 {
-    // extract from uri as /files?path=dir
-    // the var dir in order to search
-
+    // Extraer los parámetros 'dir' y 'regex' de la URI
     char *dir = extract_path_parameter(uri, "dir");
     char *regex = extract_path_parameter(uri, "regex");
 
-    // sendFiles(dir, regex, client_socket);
+    // Contador de archivos encontrados
+    int matchedFiles = 0;
+
+    // Obtener la lista de archivos que coinciden con el patrón
+    char **fileList = searchFiles(dir, regex, &matchedFiles);
+
+    // Verificar si se encontraron archivos
+    if (fileList != NULL && matchedFiles > 0)
+    {
+        // Llamar a send_file para enviar la lista de archivos como JSON
+        send_file(client_socket, fileList, matchedFiles);
+
+        // Liberar la memoria después de enviar los archivos
+        for (int i = 0; i < matchedFiles; i++)
+        {
+            free(fileList[i]);  
+        }
+        free(fileList);  
+    }
+    else
+    {
+        printf("No se encontraron archivos que coincidan con el patrón.\n");
+    }
 }
 
-// TODO: first search all the files and then send them
-void searchFiles(const char *dir, const char *regex, int clientSocket)
-{
 
+// TODO: Retorne solo la lista con los archivos que hagan match y que no envie por sockets 
+// TODO: Hacer validación en el while que verifica si es archivo o directorio
+char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
+{
     DIR *dirp;
     struct dirent *entry;
     regex_t reg;
+    struct stat fileStat;
 
     char path[BUFFER_SIZE];
-    char buffer[BUFFER_SIZE];
-    int fd, bytesRead;
 
+    // Inicializar la lista de archivos encontrados
+    char **fileList = NULL;  
+    *matchedFiles = 0;  // Contador de archivos encontrados
+
+    // Compilar el regex
     if (regcomp(&reg, regex, REG_EXTENDED) != 0)
     {
         perror("Error compilando el regex");
-        return;
+        return NULL;
     }
 
+    // Abrir el directorio
     if ((dirp = opendir(dir)) == NULL)
     {
         perror("Error abriendo el directorio");
-        return;
+        return NULL;
     }
 
+    // Leer entradas en el directorio
     while ((entry = readdir(dirp)) != NULL)
     {
+        // Verificar si el nombre del archivo coincide con el regex
         if (regexec(&reg, entry->d_name, 0, NULL, 0) == 0)
         {
             sprintf(path, "%s/%s", dir, entry->d_name);
 
-            // Enviar el nombre del archivo encontrado
-            send(clientSocket, path, strlen(path), 0);
-            send(clientSocket, "\n", 1, 0); // Salto de línea
-
-            if ((fd = open(path, O_RDONLY)) == -1)
+            // Verificar si es un archivo regular
+            if (stat(path, &fileStat) == 0 && S_ISREG(fileStat.st_mode))
             {
-                fprintf(stderr, "Error al abrir el archivo %s: %s\n", path, strerror(errno));
-                continue;
+                // Agregar el archivo a la lista de archivos encontrados
+                fileList = realloc(fileList, (*matchedFiles + 1) * sizeof(char *));  
+                fileList[*matchedFiles] = strdup(path);  
+                (*matchedFiles)++;  
             }
-
-            // Leer y enviar el archivo
-            while ((bytesRead = read(fd, buffer, BUFFER_SIZE)) > 0)
-            {
-                if (send(clientSocket, buffer, bytesRead, 0) == -1)
-                {
-                    perror("Error enviando el archivo");
-                    close(fd);
-                    return;
-                }
-            }
-
-            if (bytesRead == -1)
-            {
-                fprintf(stderr, "Error leyendo el archivo %s: %s\n", path, strerror(errno));
-            }
-
-            close(fd);
-            printf("Archivo enviado: %s\n", path);
         }
     }
 
     regfree(&reg);
     closedir(dirp);
+
+    return fileList;
 }
 
+// TODO: Crear funcion que se encarga de mandar los nombres de los archivos 
 void send_file(int client_socket, char *filename)
 {
     FILE *file = fopen(filename, "r");
@@ -301,8 +317,8 @@ void send_file(int client_socket, char *filename)
                  "Server: webserver-c\r\n"
                  "Content-Type: text/plain\r\n"
                  "Content-Length: %ld\r\n\r\n" // Include Content-Length
-                 "%s",                         // Body content
-                 strlen(body_content), body_content);
+                 "{\"name\": \"%s\", \"body\": \"%s\"}", // Body content
+                 strlen(body_content), filename, body_content);
 
         printf("response: \n----------------\n%s\n----------------\n", response);
 
@@ -316,6 +332,8 @@ void send_file(int client_socket, char *filename)
 
     fclose(file);
 }
+
+// TODO: Crear otra funcion que se encarga de mandar la lista archivos que recibe
 
 char *extract_path_parameter(const char *uri, char *parameterName)
 {
