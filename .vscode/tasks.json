@@ -1,0 +1,42 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "server",
+			"type": "shell",
+			"command": "gcc",
+			"args": [
+				"-g", // Include debugging information
+				"server.c", // Replace with your source file
+				"-pthread",
+				"-o",
+				"a.out" // Output file name
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": [
+				"$gcc"
+			]
+		},
+		{
+			"label": "client",
+			"type": "shell",
+			"command": "gcc",
+			"args": [
+				"-g", // Include debugging information
+				"client.c", // Replace with your source file
+				"-o",
+				"a.out" // Output file name
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": [
+				"$gcc"
+			]
+		}
+	]
+}
