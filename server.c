@@ -186,18 +186,36 @@ void *handle_client(void *arg)
 void paths(int client_socket, const char *uri)
 {
 
+    int matchedFiles = 0;
+
     // extract from uri as /paths?path=dir
     // the var dir in order to search
 
     char *dir = extract_path_parameter(uri, "dir");
     char *regex = extract_path_parameter(uri, "regex");
     
-    // TODO: Hay que quitar el client_socket por que lo que me va a devolver es una lista de archivos 
-    searchFiles(dir, regex, client_socket);
-    // llamar a sendFiles
+    // Llamar a searchFiles para obtener la lista de archivos
+    char **fileList = searchFiles(dir, regex, &matchedFiles);
+
+    if (fileList != NULL && matchedFiles > 0) {
+        // Enviar la lista de archivos a la funcion send_files_list
+        send_files_list(client_socket, fileList, matchedFiles);
+
+        // Liberar la memoria de la lista de archivos
+        for (int i = 0; i < matchedFiles; i++)
+        {
+            free(fileList[i]);
+        }
+        free(fileList);
+    } else {
+        printf("No se encontraron archivos en el directorio %s con el patrón %s\n", dir, regex);
+    }
+
+    free(dir);
+    free(regex);
+
 }
 
-// TODO: Esa va a llamar searchFile para obtener la lista de archivos y luego esta lo llama a sendFiles
 void files(int client_socket, const char *uri)
 {
     // Extraer los parámetros 'dir' y 'regex' de la URI
@@ -210,28 +228,25 @@ void files(int client_socket, const char *uri)
     // Obtener la lista de archivos que coinciden con el patrón
     char **fileList = searchFiles(dir, regex, &matchedFiles);
 
-    // Verificar si se encontraron archivos
-    if (fileList != NULL && matchedFiles > 0)
-    {
-        // Llamar a send_file para enviar la lista de archivos como JSON
-        send_file(client_socket, fileList, matchedFiles);
-
-        // Liberar la memoria después de enviar los archivos
+    // Iterar sobre el fileList y enviar cada archivo individualmente, llamar a send_file
+    if (matchedFiles > 0 ) {
+        //Iterar sobre la lista
         for (int i = 0; i < matchedFiles; i++)
         {
-            free(fileList[i]);  
+            send_file(client_socket, fileList[i]);
         }
-        free(fileList);  
-    }
-    else
-    {
-        printf("No se encontraron archivos que coincidan con el patrón.\n");
+
+        // Liberar la memoria de la lista de archivos
+        for (int i = 0; i < matchedFiles; i++)
+        {
+            free(fileList[i]);
+        }
+        free(fileList);
+    } else {
+        printf("No se encontraron archivos en el directorio %s con el patrón %s\n", dir, regex);
     }
 }
 
-
-// TODO: Retorne solo la lista con los archivos que hagan match y que no envie por sockets 
-// TODO: Hacer validación en el while que verifica si es archivo o directorio
 char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
 {
     DIR *dirp;
@@ -242,8 +257,7 @@ char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
     char path[BUFFER_SIZE];
 
     // Inicializar la lista de archivos encontrados
-    char **fileList = NULL;  
-    *matchedFiles = 0;  // Contador de archivos encontrados
+    char **fileList = NULL;
 
     // Compilar el regex
     if (regcomp(&reg, regex, REG_EXTENDED) != 0)
@@ -256,24 +270,53 @@ char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
     if ((dirp = opendir(dir)) == NULL)
     {
         perror("Error abriendo el directorio");
+        regfree(&reg);
         return NULL;
     }
 
     // Leer entradas en el directorio
     while ((entry = readdir(dirp)) != NULL)
     {
-        // Verificar si el nombre del archivo coincide con el regex
-        if (regexec(&reg, entry->d_name, 0, NULL, 0) == 0)
+        // Ignorar "." y ".." para evitar ciclos infinitos
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
         {
-            sprintf(path, "%s/%s", dir, entry->d_name);
+            continue;
+        }
 
-            // Verificar si es un archivo regular
-            if (stat(path, &fileStat) == 0 && S_ISREG(fileStat.st_mode))
+        // Crear la ruta completa del archivo o directorio
+        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+
+        // Obtener la información del archivo o directorio
+        if (stat(path, &fileStat) == 0)
+        {
+            // Verificar si es un directorio 
+            if (S_ISDIR(fileStat.st_mode))
             {
-                // Agregar el archivo a la lista de archivos encontrados
-                fileList = realloc(fileList, (*matchedFiles + 1) * sizeof(char *));  
-                fileList[*matchedFiles] = strdup(path);  
-                (*matchedFiles)++;  
+                // Si es un directorio, llamar recursivamente a searchFiles
+                char **subDirFiles = searchFiles(path, regex, matchedFiles);
+                if (subDirFiles != NULL)
+                {
+                    // Concatenar la lista de archivos encontrados en el subdirectorio
+                    int subDirCount = *matchedFiles; 
+                    fileList = realloc(fileList, subDirCount * sizeof(char *));
+                    for (int i = 0; i < subDirCount; i++)
+                    {
+                        fileList[*matchedFiles - subDirCount + i] = subDirFiles[i];
+                    }
+                    free(subDirFiles);
+                }
+            }
+            // Verificar si es un archivo regular
+            else if (S_ISREG(fileStat.st_mode))
+            {
+                // Si es un archivo regular, verificar con el regex
+                if (regexec(&reg, entry->d_name, 0, NULL, 0) == 0)
+                {
+                    // Agregar el archivo a la lista
+                    fileList = realloc(fileList, (*matchedFiles + 1) * sizeof(char *));
+                    fileList[*matchedFiles] = strdup(path);
+                    (*matchedFiles)++;
+                }
             }
         }
     }
@@ -284,7 +327,6 @@ char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
     return fileList;
 }
 
-// TODO: Crear funcion que se encarga de mandar los nombres de los archivos 
 void send_file(int client_socket, char *filename)
 {
     FILE *file = fopen(filename, "r");
@@ -294,46 +336,114 @@ void send_file(int client_socket, char *filename)
         return;
     }
 
-    // HTTP response with body content
+    // Obtener el tamaño del archivo
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET); // Volver al inicio del archivo
 
+    // Crear encabezado de respuesta HTTP
     char response[BUFFER_SIZE];
-
-    size_t bytes_read;
-    int i = 0;
-
     const char *header = "HTTP/1.0 200 OK\r\n"
                          "Server: webserver-c\r\n"
-                         "Content-Type: text/plain\r\n"
+                         "Content-Type: application/octet-stream\r\n"
                          "Content-Length: %ld\r\n\r\n";
+    
+    snprintf(response, sizeof(response), header, file_size);
 
-    int body_size = BUFFER_SIZE - strlen(header) - 1;
-    char body_content[body_size];
+    // Enviar encabezado
+    send(client_socket, response, strlen(response), 0);
 
-    while ((bytes_read = fread(body_content, 1, body_size, file)) > 0)
+    // Enviar el archivo en partes
+    size_t bytes_read;
+    char body_content[BUFFER_SIZE];
+    
+    while ((bytes_read = fread(body_content, 1, sizeof(body_content), file)) > 0)
     {
-
-        snprintf(response, sizeof(response),
-                 "HTTP/1.0 200 OK\r\n"
-                 "Server: webserver-c\r\n"
-                 "Content-Type: text/plain\r\n"
-                 "Content-Length: %ld\r\n\r\n" // Include Content-Length
-                 "{\"name\": \"%s\", \"body\": \"%s\"}", // Body content
-                 strlen(body_content), filename, body_content);
-
-        printf("response: \n----------------\n%s\n----------------\n", response);
-
-        send(client_socket, response, BUFFER_SIZE, 0);
-
-        memset(body_content, 0, sizeof(body_content));
-        memset(response, 0, sizeof(response));
-
-        printf("\nsent iteration number '%d'\n", i++);
+        // Enviar el contenido del archivo en partes
+        send(client_socket, body_content, bytes_read, 0);
     }
 
     fclose(file);
 }
 
-// TODO: Crear otra funcion que se encarga de mandar la lista archivos que recibe
+
+void send_files_list(int client_socket, char **fileList, int matchedFiles)
+{
+    // Respuesta HTTP con el contenido del cuerpo
+    char response[BUFFER_SIZE];
+    char *files = malloc(BUFFER_SIZE);  
+    files[0] = '\0'; 
+
+    // Crear el encabezado HTTP, asumiendo que la respuesta será JSON
+    const char *header = "HTTP/1.0 200 OK\r\n"
+                         "Server: webserver-c\r\n"
+                         "Content-Type: application/json\r\n"
+                         "Content-Length: %ld\r\n\r\n";
+
+    int total_size = 0;
+
+    // Iterar sobre el fileList y construir el array JSON
+    for (int i = 0; i < matchedFiles; i++)
+    {
+        // Agregar el nombre de archivo al array JSON
+        strcat(files, "\"");
+        strcat(files, fileList[i]);
+        strcat(files, "\"");
+
+        
+        if (i < matchedFiles - 1)
+        {
+            strcat(files, ",");
+        }
+
+        // Calcular la longitud de la cadena actual files
+        total_size = strlen(files);
+
+        // Validacion del Buffer
+        int body_size = BUFFER_SIZE - strlen(header) - 1;
+
+        // Si agregar otro archivo excede el tamaño del buffer, enviar el contenido actual
+        if (total_size > body_size)
+        {
+            // Formatear el encabezado HTTP
+            snprintf(response, sizeof(response),
+                     header,
+                     total_size);
+
+            // Enviar el encabezado
+            send(client_socket, response, strlen(response), 0);
+
+            // Enviar el contenido de los archivos
+            send(client_socket, files, strlen(files), 0);
+
+            // Limpiar el buffer de archivos para el siguiente fragmento
+            files[0] = '\0'; 
+            strcat(files, "["); 
+        }
+    }
+
+    // Asegurarse de que los archivos restantes sean enviados después del ciclo
+    if (strlen(files) > 1) 
+    {
+        // Agregar el corchete de cierre del array JSON
+        strcat(files, "]");
+
+        // Formatear el encabezado HTTP
+        snprintf(response, sizeof(response),
+                 header,
+                 strlen(files));
+
+        // Enviar el encabezado
+        send(client_socket, response, strlen(response), 0);
+
+        // Enviar el contenido del cuerpo
+        send(client_socket, files, strlen(files), 0);
+    }
+
+    // Liberar la memoria dinámica después de usarla
+    free(files);
+}
+
 
 char *extract_path_parameter(const char *uri, char *parameterName)
 {
