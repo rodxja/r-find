@@ -23,11 +23,15 @@
             "miDebuggerPath": "/usr/bin/gdb" // Path to gdb
         },
         {
-            "name": "client",
+            "name": "client_paths",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/a.out", // Change this to your compiled program's path
-            "args": [],
+            "args": [
+                ".",
+                "-name",
+                "*.txt"
+            ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],

@@ -24,12 +24,17 @@
 #include <unistd.h>
 
 #define PORT 8080
-#define BUFFER_SIZE 1024
+#define HTTP_REQUEST_SIZE 1024
+#define HTTP_RESPONSE_SIZE 1024
+#define HTTP_METHOD_SIZE 8
+#define HTTP_URI_SIZE 256
+#define HTTP_VERSION_SIZE 16
+#define PATH_SIZE 512
+#define PATH_PARAMETER_SIZE 128
 #define MAX_CLIENTS 3
 
 int clients[MAX_CLIENTS];
 int numClients = 0;
-
 
 char **searchFiles(const char *dir, const char *regex, int *matchedFiles);
 void send_file(int client_socket, char *filename);
@@ -37,10 +42,10 @@ char *extract_path_parameter(const char *uri, char *parameterName);
 void paths(int client_socket, const char *uri);
 void files(int client_socket, const char *uri);
 void *handle_client(void *arg);
+void send_files_list(int client_socket, char **fileList, int matchedFiles);
 
 int main()
 {
-    char buffer[BUFFER_SIZE];
 
     // Create a socket
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -127,12 +132,12 @@ void *handle_client(void *arg)
         return NULL;
     }
 
-    char buffer[1024] = {0};
+    char buffer[HTTP_REQUEST_SIZE] = {0};
 
     // TODO : check difference between read and recv
 
     // Read from the socket
-    ssize_t valread = recv(newsockfd, buffer, BUFFER_SIZE, 0);
+    ssize_t valread = recv(newsockfd, buffer, HTTP_REQUEST_SIZE, 0);
     if (valread < 0)
     {
         perror("webserver (read)");
@@ -145,7 +150,7 @@ void *handle_client(void *arg)
     // TODO : create router func
 
     // Read the request
-    char method[BUFFER_SIZE], uri[BUFFER_SIZE], version[BUFFER_SIZE];
+    char method[HTTP_METHOD_SIZE], uri[HTTP_URI_SIZE], version[HTTP_VERSION_SIZE];
     sscanf(buffer, "%s %s %s", method, uri, version);
 
     printf("[%s:%u] method : '%s' version : '%s' uri : '%s'\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port), method, version, uri);
@@ -171,6 +176,7 @@ void *handle_client(void *arg)
     }
     else if (strncmp(uri, "/files", 5) != 0)
     {
+        files(newsockfd, uri);
         close(newsockfd);
         return NULL;
     }
@@ -193,11 +199,12 @@ void paths(int client_socket, const char *uri)
 
     char *dir = extract_path_parameter(uri, "dir");
     char *regex = extract_path_parameter(uri, "regex");
-    
+
     // Llamar a searchFiles para obtener la lista de archivos
     char **fileList = searchFiles(dir, regex, &matchedFiles);
 
-    if (fileList != NULL && matchedFiles > 0) {
+    if (fileList != NULL && matchedFiles > 0)
+    {
         // Enviar la lista de archivos a la funcion send_files_list
         send_files_list(client_socket, fileList, matchedFiles);
 
@@ -207,13 +214,15 @@ void paths(int client_socket, const char *uri)
             free(fileList[i]);
         }
         free(fileList);
-    } else {
+    }
+    else
+    {
+        // TODO : send a message to the client that there are no files
         printf("No se encontraron archivos en el directorio %s con el patrón %s\n", dir, regex);
     }
 
     free(dir);
     free(regex);
-
 }
 
 void files(int client_socket, const char *uri)
@@ -229,8 +238,9 @@ void files(int client_socket, const char *uri)
     char **fileList = searchFiles(dir, regex, &matchedFiles);
 
     // Iterar sobre el fileList y enviar cada archivo individualmente, llamar a send_file
-    if (matchedFiles > 0 ) {
-        //Iterar sobre la lista
+    if (matchedFiles > 0)
+    {
+        // Iterar sobre la lista
         for (int i = 0; i < matchedFiles; i++)
         {
             send_file(client_socket, fileList[i]);
@@ -242,7 +252,9 @@ void files(int client_socket, const char *uri)
             free(fileList[i]);
         }
         free(fileList);
-    } else {
+    }
+    else
+    {
         printf("No se encontraron archivos en el directorio %s con el patrón %s\n", dir, regex);
     }
 }
@@ -254,7 +266,7 @@ char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
     regex_t reg;
     struct stat fileStat;
 
-    char path[BUFFER_SIZE];
+    char path[PATH_SIZE];
 
     // Inicializar la lista de archivos encontrados
     char **fileList = NULL;
@@ -289,7 +301,7 @@ char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
         // Obtener la información del archivo o directorio
         if (stat(path, &fileStat) == 0)
         {
-            // Verificar si es un directorio 
+            // Verificar si es un directorio
             if (S_ISDIR(fileStat.st_mode))
             {
                 // Si es un directorio, llamar recursivamente a searchFiles
@@ -297,7 +309,7 @@ char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
                 if (subDirFiles != NULL)
                 {
                     // Concatenar la lista de archivos encontrados en el subdirectorio
-                    int subDirCount = *matchedFiles; 
+                    int subDirCount = *matchedFiles;
                     fileList = realloc(fileList, subDirCount * sizeof(char *));
                     for (int i = 0; i < subDirCount; i++)
                     {
@@ -342,12 +354,12 @@ void send_file(int client_socket, char *filename)
     fseek(file, 0, SEEK_SET); // Volver al inicio del archivo
 
     // Crear encabezado de respuesta HTTP
-    char response[BUFFER_SIZE];
+    char response[HTTP_RESPONSE_SIZE];
     const char *header = "HTTP/1.0 200 OK\r\n"
                          "Server: webserver-c\r\n"
                          "Content-Type: application/octet-stream\r\n"
                          "Content-Length: %ld\r\n\r\n";
-    
+
     snprintf(response, sizeof(response), header, file_size);
 
     // Enviar encabezado
@@ -355,8 +367,8 @@ void send_file(int client_socket, char *filename)
 
     // Enviar el archivo en partes
     size_t bytes_read;
-    char body_content[BUFFER_SIZE];
-    
+    char body_content[HTTP_RESPONSE_SIZE];
+
     while ((bytes_read = fread(body_content, 1, sizeof(body_content), file)) > 0)
     {
         // Enviar el contenido del archivo en partes
@@ -366,13 +378,12 @@ void send_file(int client_socket, char *filename)
     fclose(file);
 }
 
-
 void send_files_list(int client_socket, char **fileList, int matchedFiles)
 {
     // Respuesta HTTP con el contenido del cuerpo
-    char response[BUFFER_SIZE];
-    char *files = malloc(BUFFER_SIZE);  
-    files[0] = '\0'; 
+    char response[HTTP_RESPONSE_SIZE];
+    char *files = malloc(HTTP_RESPONSE_SIZE);
+    files[0] = '\0';
 
     // Crear el encabezado HTTP, asumiendo que la respuesta será JSON
     const char *header = "HTTP/1.0 200 OK\r\n"
@@ -386,21 +397,14 @@ void send_files_list(int client_socket, char **fileList, int matchedFiles)
     for (int i = 0; i < matchedFiles; i++)
     {
         // Agregar el nombre de archivo al array JSON
-        strcat(files, "\"");
         strcat(files, fileList[i]);
-        strcat(files, "\"");
-
-        
-        if (i < matchedFiles - 1)
-        {
-            strcat(files, ",");
-        }
+        strcat(files, "\n");
 
         // Calcular la longitud de la cadena actual files
         total_size = strlen(files);
 
         // Validacion del Buffer
-        int body_size = BUFFER_SIZE - strlen(header) - 1;
+        int body_size = HTTP_RESPONSE_SIZE - strlen(header) - 1;
 
         // Si agregar otro archivo excede el tamaño del buffer, enviar el contenido actual
         if (total_size > body_size)
@@ -417,17 +421,13 @@ void send_files_list(int client_socket, char **fileList, int matchedFiles)
             send(client_socket, files, strlen(files), 0);
 
             // Limpiar el buffer de archivos para el siguiente fragmento
-            files[0] = '\0'; 
-            strcat(files, "["); 
+            files[0] = '\0';
         }
     }
 
     // Asegurarse de que los archivos restantes sean enviados después del ciclo
-    if (strlen(files) > 1) 
+    if (strlen(files) > 1)
     {
-        // Agregar el corchete de cierre del array JSON
-        strcat(files, "]");
-
         // Formatear el encabezado HTTP
         snprintf(response, sizeof(response),
                  header,
@@ -444,14 +444,13 @@ void send_files_list(int client_socket, char **fileList, int matchedFiles)
     free(files);
 }
 
-
 char *extract_path_parameter(const char *uri, char *parameterName)
 {
 
     // add = to the end of the parameter name
-    char pName[BUFFER_SIZE];
+    char pName[PATH_PARAMETER_SIZE];
     sprintf(pName, "%s=", parameterName);
-    char *parameter = malloc(BUFFER_SIZE);
+    char *parameter = malloc(PATH_PARAMETER_SIZE);
 
     // Look for "{parameter}=" in the URI
 
@@ -463,7 +462,7 @@ char *extract_path_parameter(const char *uri, char *parameterName)
 
         // Copy the filename value until the end of the string or until '&' (if there are multiple parameters)
         int i = 0;
-        while (start[i] != '\0' && start[i] != '&' && i < BUFFER_SIZE - 1)
+        while (start[i] != '\0' && start[i] != '&' && i < PATH_PARAMETER_SIZE - 1)
         {
             parameter[i] = start[i];
             i++;

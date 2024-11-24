@@ -11,14 +11,18 @@
 #include <stdlib.h>
 
 #define PORT 8080
-#define BUFFER_SIZE 1024
+#define HTTP_REQUEST_SIZE 1024
+#define HTTP_RESPONSE_SIZE 1024
+#define URI_SIZE 256
+#define INPUT_SIZE 128
 #define SERVER_IP "localhost"
 
 void receive_file(int client_socket);
-char *getInput();
+void receive_paths(int client_socket);
 void getPaths(const char *dir, const char *regex);
 void getFiles(const char *dir, const char *regex);
-void create_socket(const char *method, const char *uri);
+int *create_socket_request(const char *method, const char *uri);
+void receive_header(int client_socket);
 
 // rfind . -name SEARCH_NAME
 // rfind ./source -get -name "*.cpp"
@@ -68,16 +72,17 @@ int main(int argc, char const *argv[])
 uri: /paths?dir=./source&regex=.*
     /files?dir=./source&regex=.*
  */
-void create_socket(const char *method, const char *uri)
+int *create_socket_request(const char *method, const char *uri)
 {
-    int status, client_fd;
+    static int client_fd;
+    int status;
     struct sockaddr_in serv_addr;
-    char request[BUFFER_SIZE * 3];
+    char request[HTTP_REQUEST_SIZE];
 
     if ((client_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
         printf("\n Socket creation error \n");
-        return;
+        return NULL;
     }
 
     serv_addr.sin_family = AF_INET;
@@ -87,16 +92,14 @@ void create_socket(const char *method, const char *uri)
     // form
     if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0)
     {
-        printf(
-            "\nInvalid address/ Address not supported \n");
-        return;
+        printf("\nInvalid address/ Address not supported \n");
+        return NULL;
     }
 
-    if ((status = connect(client_fd, (struct sockaddr *)&serv_addr,
-                          sizeof(serv_addr))) < 0)
+    if ((status = connect(client_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr))) < 0)
     {
         printf("\nConnection Failed \n");
-        return;
+        return NULL;
     }
 
     // Format the HTTP GET/POST/PUT/DELETE request with URI and query parameters
@@ -106,45 +109,57 @@ void create_socket(const char *method, const char *uri)
     printf("Requesting file: %s\n", request);
     send(client_fd, request, strlen(request), 0);
 
-    receive_file(client_fd);
-
-    // closing the connected socket
-    close(client_fd);
+    return &client_fd;
 }
 
 // TODO : this handle the responses from the server
 void receive_file(int client_socket)
 {
-    char buffer[BUFFER_SIZE];
+    char response[HTTP_RESPONSE_SIZE];
     ssize_t bytes_read;
-    int i = 0;
-    while ((bytes_read = read(client_socket, buffer, BUFFER_SIZE)) > 0)
+    // each chunk read has the following format
+    /*
+    <<name>>\n
+    <<content>>\n
+     */
+
+    // TODO : read from response the size of the request and use it to know when to stop reading
+
+    while ((bytes_read = read(client_socket, response, HTTP_RESPONSE_SIZE)) > 0)
     {
-        // PRINT TO STDOUT
-        printf("buffer: \n----------------\n%s\n----------------\n", buffer);
+        printf("%s", response);
 
         // CLEAR BUFFER
-        memset(buffer, 0, sizeof(buffer));
+        memset(response, 0, sizeof(response));
 
-        printf("\nread iteration number '%d'\n", i);
-
-        i++;
+        // TODO : we must write the content to a file
     }
 }
 
-char *getInput()
+// TODO : print the paths in a legible way to the console
+void receive_paths(int client_socket)
 {
-    char *input = malloc(BUFFER_SIZE); // TODO : use correct size
-    fgets(input, BUFFER_SIZE, stdin);
-
-    // Remove the newline character if it exists
-    size_t len = strlen(input);
-    if (len > 0 && input[len - 1] == '\n')
+    char response[HTTP_RESPONSE_SIZE];
+    ssize_t bytes_read;
+    printf("Paths: \n");
+    while ((bytes_read = read(client_socket, response, HTTP_RESPONSE_SIZE)) > 0)
     {
-        input[len - 1] = '\0'; // Replace newline with null terminator
-    }
+        printf("%s\n", response);
 
-    return input;
+        // CLEAR BUFFER
+        memset(response, 0, sizeof(response));
+    }
+}
+
+void receive_header(int client_socket)
+{
+    char response[HTTP_RESPONSE_SIZE];
+    int i = 0;
+    ssize_t bytes_read = read(client_socket, response, HTTP_RESPONSE_SIZE);
+
+    // PRINT TO STDOUT
+
+    printf("Response header: \n----------------\n%s\n----------------\n", response);
 }
 
 void getPaths(const char *dir, const char *regex)
@@ -152,13 +167,17 @@ void getPaths(const char *dir, const char *regex)
     printf("dir: '%s'\n", dir);
     printf("regex: '%s'\n", regex);
 
-    // TODO : use correct size
-    char *uri = malloc(BUFFER_SIZE);
-    snprintf(uri, BUFFER_SIZE, "/paths?dir=%s&regex=%s", dir, regex);
+    char *uri = malloc(URI_SIZE);
+    snprintf(uri, URI_SIZE, "/paths?dir=%s&regex=%s", dir, regex);
 
     printf("uri: '%s'\n", uri);
-    create_socket("GET", uri);
-    // this will print the file to stdout
+    int *client_fd = create_socket_request("GET", uri);
+    if (client_fd)
+    {
+        receive_paths(*client_fd);
+        // closing the connected socket
+        close(*client_fd);
+    }
 }
 
 void getFiles(const char *dir, const char *regex)
@@ -166,13 +185,18 @@ void getFiles(const char *dir, const char *regex)
     printf("dir: '%s'\n", dir);
     printf("regex: '%s'\n", regex);
 
-    // TODO : use correct size
-    char *uri = malloc(BUFFER_SIZE);
-    snprintf(uri, BUFFER_SIZE, "/files?dir=%s&regex=%s", dir, regex);
+    char *uri = malloc(URI_SIZE);
+    snprintf(uri, URI_SIZE, "/files?dir=%s&regex=%s", dir, regex);
 
     printf("uri: '%s'\n", uri);
-    create_socket("GET", uri);
-    // this will create a file with the contents of the file
+    int *client_fd = create_socket_request("GET", uri);
+    if (client_fd)
+    {
+        receive_header(*client_fd);
+        receive_file(*client_fd);
+        // closing the connected socket
+        close(*client_fd);
+    }
 }
 
 // gcc client.c -o rfind
