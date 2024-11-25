@@ -7,6 +7,9 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <stdlib.h>
 
@@ -111,30 +114,108 @@ int *create_socket_request(const char *method, const char *uri)
 
     return &client_fd;
 }
+void createDirectories(const char *filePath)
+{
+    char tempPath[256];
+    size_t len = strlen(filePath);
+
+    // Copy the file path into a temporary buffer
+    strncpy(tempPath, filePath, sizeof(tempPath) - 1);
+    tempPath[sizeof(tempPath) - 1] = '\0'; // Ensure null termination
+
+    // Remove the last segment (the file name)
+    char *lastSlash = strrchr(tempPath, '/');
+    if (lastSlash != NULL)
+    {
+        *lastSlash = '\0'; // Null-terminate to get the directory path
+    }
+    else
+    {
+        // No directory separators found, nothing to create
+        return;
+    }
+
+    // Create directories recursively
+    for (size_t i = 0; i < strlen(tempPath); i++)
+    {
+        if (tempPath[i] == '/')
+        {
+            tempPath[i] = '\0'; // Temporarily null-terminate
+            if (mkdir(tempPath, 0755) != 0 && errno != EEXIST)
+            {
+                perror("mkdir failed");
+                exit(EXIT_FAILURE);
+            }
+            tempPath[i] = '/'; // Restore separator
+        }
+    }
+
+    // Create the final directory (if not already created)
+    if (mkdir(tempPath, 0755) != 0 && errno != EEXIST)
+    {
+        perror("mkdir failed");
+        exit(EXIT_FAILURE);
+    }
+}
 
 // TODO : this handle the responses from the server
 void receive_file(int client_socket)
 {
     char response[HTTP_RESPONSE_SIZE];
     ssize_t bytes_read;
-    // each chunk read has the following format
-    /*
-    <<name>>\n
-    <<content>>\n
-     */
 
     char header[HTTP_RESPONSE_SIZE];
-    ssize_t bytes_read = read(client_socket, header, HTTP_RESPONSE_SIZE);
+    memset(header, 0, sizeof(header));
+    bytes_read = read(client_socket, header, HTTP_RESPONSE_SIZE);
 
-    // extract content-length
-    
-    int content_length 
+    printf("Header: %s\n----------------\n\n", header);
 
     // TODO : read from response the size of the request and use it to know when to stop reading
 
     while ((bytes_read = read(client_socket, response, HTTP_RESPONSE_SIZE)) > 0)
     {
-        printf("%s", response);
+
+        printf("%s\n", response);
+        char name[HTTP_RESPONSE_SIZE] = {0};
+        char body[HTTP_RESPONSE_SIZE] = {0};
+
+        // Find "name" value
+        const char *nameStart = strstr(response, "\"name\":\"");
+        if (nameStart)
+        {
+            nameStart += strlen("\"name\":\"");
+            const char *nameEnd = strchr(nameStart, '"');
+            if (nameEnd)
+            {
+                strncpy(name, nameStart, nameEnd - nameStart);
+            }
+        }
+
+        // Find "body" value
+        const char *bodyStart = strstr(response, "\"body\":\"");
+        if (bodyStart)
+        {
+            bodyStart += strlen("\"body\":\"");
+            const char *bodyEnd = strchr(bodyStart, '"');
+            if (bodyEnd)
+            {
+                strncpy(body, bodyStart, bodyEnd - bodyStart);
+            }
+        }
+
+        // create and write to file
+
+        createDirectories(name);
+
+        FILE *file = fopen(name, "ab");
+        if (file == NULL)
+        {
+            perror("error opening file");
+            return;
+        }
+
+        fprintf(file, "%s", body);
+        fclose(file);
 
         // CLEAR BUFFER
         memset(response, 0, sizeof(response));

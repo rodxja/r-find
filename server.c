@@ -74,7 +74,7 @@ void freeFindPaths(FindPaths *findPaths)
 }
 
 void searchFiles(const char *dir, FindPaths *findPaths);
-void send_file(int client_socket, char *filename);
+void send_file(int client_socket, FindPaths *findPaths);
 char *extract_path_parameter(const char *uri, char *parameterName);
 void paths(int client_socket, const char *uri);
 void files(int client_socket, const char *uri);
@@ -211,7 +211,7 @@ void *handle_client(void *arg)
         close(newsockfd);
         return NULL;
     }
-    else if (strncmp(uri, "/files", 5) != 0)
+    else if (strncmp(uri, "/files", 5) == 0)
     {
         files(newsockfd, uri);
         close(newsockfd);
@@ -263,9 +263,6 @@ void files(int client_socket, const char *uri)
     char *dir = extract_path_parameter(uri, "dir");
     char *regex = extract_path_parameter(uri, "regex");
 
-    // Contador de archivos encontrados
-    int matchedFiles = 0;
-
     // Obtener la lista de archivos que coinciden con el patrón
     FindPaths *findPaths = newFindPaths(regex);
 
@@ -274,21 +271,13 @@ void files(int client_socket, const char *uri)
     // Iterar sobre el findPaths y enviar cada archivo individualmente, llamar a send_file
     if (findPaths->numFiles > 0)
     {
-        // Iterar sobre la lista
-        for (int i = 0; i < matchedFiles; i++)
-        {
-            send_file(client_socket, findPaths->list[i]);
-        }
+        send_file(client_socket, findPaths);
 
-        // Liberar la memoria de la lista de archivos
-        for (int i = 0; i < findPaths->numFiles; i++)
-        {
-            free(findPaths->list[i]);
-        }
-        free(findPaths);
+        freeFindPaths(findPaths);
     }
     else
     {
+        // TODO : send a message to the client that there are no files
         printf("No se encontraron archivos en el directorio %s con el patrón %s\n", dir, regex);
     }
 }
@@ -354,19 +343,28 @@ void searchFiles(const char *dir, FindPaths *findPaths)
     closedir(dirp);
 }
 
-void send_file(int client_socket, char *filename)
+typedef struct
 {
-    FILE *file = fopen(filename, "r");
-    if (file == NULL)
-    {
-        perror("error opening file");
-        return;
-    }
+    char name[PATH_SIZE];
+    char body[HTTP_RESPONSE_SIZE]; // size is 1024 - name - header - 1 = 1024 - 512 - 128 - 1 = 383
+} ResponseFiles;
 
-    // Obtener el tamaño del archivo
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET); // Volver al inicio del archivo
+ResponseFiles *newResponseFiles()
+{
+    ResponseFiles *responseFiles = malloc(sizeof(ResponseFiles));
+    return responseFiles;
+}
+
+/* char *getResponseFilesJson(ResponseFiles *responseFiles, int bufferSize)
+{
+    char *json = malloc(HTTP_RESPONSE_SIZE);
+    snprintf(json, HTTP_RESPONSE_SIZE, "{\"name\":\"%s\",\"body\":\"%s\"}", responseFiles->name, responseFiles->body);
+    return json;
+} */
+
+// TODO : send fileName
+void send_file(int client_socket, FindPaths *findPaths)
+{
 
     // Crear encabezado de respuesta HTTP
     char response[HTTP_RESPONSE_SIZE];
@@ -375,22 +373,60 @@ void send_file(int client_socket, char *filename)
                          "Content-Type: application/octet-stream\r\n"
                          "Content-Length: %ld\r\n\r\n";
 
-    snprintf(response, sizeof(response), header, file_size);
+    snprintf(response, sizeof(response), header, HTTP_RESPONSE_SIZE); // file_size is not the correct conten length
+                                                                      // Enviar encabezado
+    ssize_t bytes_send_header = send(client_socket, response, strlen(response), 0);
+    printf("bytes sent header: %ld\n", bytes_send_header);
 
-    // Enviar encabezado
-    send(client_socket, response, strlen(response), 0);
-
-    // Enviar el archivo en partes
-    size_t bytes_read;
-    char body_content[HTTP_RESPONSE_SIZE];
-
-    while ((bytes_read = fread(body_content, 1, sizeof(body_content), file)) > 0)
+    for (int i = 0; i < findPaths->numFiles; i++)
     {
-        // Enviar el contenido del archivo en partes
-        send(client_socket, body_content, bytes_read, 0);
-    }
 
-    fclose(file);
+        FILE *file = fopen(findPaths->list[i], "r");
+        if (file == NULL)
+        {
+            perror("error opening file");
+            return;
+        }
+
+        // Obtener el tamaño del archivo
+        fseek(file, 0, SEEK_END);
+        long file_size = ftell(file);
+        fseek(file, 0, SEEK_SET); // Volver al inicio del archivo
+
+        // get size of filename
+        int filename_size = strlen(findPaths->list[i]);
+
+        // Enviar el archivo en partes
+        size_t bytes_read;
+
+        const char *responseFile = "{\"name\":\"%s\",\"body\":\"%s\"}";
+        char responseBody[HTTP_RESPONSE_SIZE];
+        memset(responseBody, 0, sizeof(responseBody));
+
+        int responseFile_size = strlen(responseFile);
+        int remainingSize = HTTP_RESPONSE_SIZE - responseFile_size - filename_size /* - 1*/;
+
+        char body_content[remainingSize];
+        memset(body_content, 0, sizeof(body_content));
+
+        while ((bytes_read = fread(body_content, 1, sizeof(body_content), file)) > 0)
+        {
+            snprintf(responseBody, sizeof(responseBody), responseFile, findPaths->list[i], body_content);
+
+            printf("responseBody: %s, %ld\n", responseBody, sizeof(responseBody));
+            printf("responseFile: %s\n", responseFile);
+            printf("responseFile_size: %ld\n", strlen(responseFile));
+            printf("body_content: %s\n", body_content);
+
+            // Enviar el contenido del archivo en partes
+            ssize_t bytes_send_body = send(client_socket, responseBody, strlen(responseBody), 0);
+            printf("bytes sent body: %ld\n", bytes_send_body);
+            memset(responseBody, 0, sizeof(responseBody));
+            memset(body_content, 0, sizeof(body_content));
+        }
+
+        fclose(file);
+    }
 }
 
 void send_files_list(int client_socket, FindPaths *findPaths)

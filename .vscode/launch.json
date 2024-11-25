@@ -46,6 +46,32 @@
             ],
             "preLaunchTask": "client",
             "miDebuggerPath": "/usr/bin/gdb" // Path to gdb
+        },
+        {
+            "name": "client_files",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/client/rfind.out", // Change this to your compiled program's path
+            "args": [
+                ".",
+                "-get",
+                "-name",
+                "c.txt"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "client",
+            "miDebuggerPath": "/usr/bin/gdb" // Path to gdb
         }
     ]
 }
