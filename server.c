@@ -70,10 +70,6 @@ FindPaths *newFindPaths(const char *regex)
 void freeFindPaths(FindPaths *findPaths)
 {
     regfree(&findPaths->reg);
-    for (int i = 0; i < findPaths->numFiles; i++)
-    {
-        free(findPaths->list[i]);
-    }
     free(findPaths);
 }
 
@@ -401,6 +397,8 @@ void send_files_list(int client_socket, FindPaths *findPaths)
 {
     // Respuesta HTTP con el contenido del cuerpo
     char response[HTTP_RESPONSE_SIZE];
+    // clean response
+    memset(response, 0, sizeof(response));
     char *files = malloc(HTTP_RESPONSE_SIZE);
     files[0] = '\0';
 
@@ -429,15 +427,15 @@ void send_files_list(int client_socket, FindPaths *findPaths)
         if (total_size > body_size)
         {
             // Formatear el encabezado HTTP
-            snprintf(response, sizeof(response),
-                     header,
-                     total_size);
+            snprintf(response, sizeof(response), header, total_size);
 
             // Enviar el encabezado
             send(client_socket, response, strlen(response), 0);
+            printf("response header: %s\n", response);
 
             // Enviar el contenido de los archivos
             send(client_socket, files, strlen(files), 0);
+            printf("response body: %s\n", files);
 
             // Limpiar el buffer de archivos para el siguiente fragmento
             files[0] = '\0';
@@ -454,9 +452,11 @@ void send_files_list(int client_socket, FindPaths *findPaths)
 
         // Enviar el encabezado
         send(client_socket, response, strlen(response), 0);
+        printf("response header: %s\n", response);
 
         // Enviar el contenido del cuerpo
         send(client_socket, files, strlen(files), 0);
+        printf("response body: %s\n", files);
     }
 
     // Liberar la memoria dinámica después de usarla

@@ -123,6 +123,13 @@ void receive_file(int client_socket)
     <<content>>\n
      */
 
+    char header[HTTP_RESPONSE_SIZE];
+    ssize_t bytes_read = read(client_socket, header, HTTP_RESPONSE_SIZE);
+
+    // extract content-length
+    
+    int content_length 
+
     // TODO : read from response the size of the request and use it to know when to stop reading
 
     while ((bytes_read = read(client_socket, response, HTTP_RESPONSE_SIZE)) > 0)
@@ -140,6 +147,7 @@ void receive_file(int client_socket)
 void receive_paths(int client_socket)
 {
     char response[HTTP_RESPONSE_SIZE];
+    memset(response, 0, sizeof(response));
     ssize_t bytes_read;
     printf("Paths: \n");
     while ((bytes_read = read(client_socket, response, HTTP_RESPONSE_SIZE)) > 0)
@@ -174,6 +182,7 @@ void getPaths(const char *dir, const char *regex)
     int *client_fd = create_socket_request("GET", uri);
     if (client_fd)
     {
+        // receive_header(*client_fd);
         receive_paths(*client_fd);
         // closing the connected socket
         close(*client_fd);
@@ -192,7 +201,7 @@ void getFiles(const char *dir, const char *regex)
     int *client_fd = create_socket_request("GET", uri);
     if (client_fd)
     {
-        receive_header(*client_fd);
+        // receive_header(*client_fd);
         receive_file(*client_fd);
         // closing the connected socket
         close(*client_fd);
