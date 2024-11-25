@@ -409,20 +409,23 @@ void send_file(int client_socket, FindPaths *findPaths)
         char body_content[remainingSize];
         memset(body_content, 0, sizeof(body_content));
 
+        int counter = 0;
+
         while ((bytes_read = fread(body_content, 1, sizeof(body_content), file)) > 0)
         {
             snprintf(responseBody, sizeof(responseBody), responseFile, findPaths->list[i], body_content);
 
             printf("responseBody: %s, %ld\n", responseBody, sizeof(responseBody));
-            printf("responseFile: %s\n", responseFile);
-            printf("responseFile_size: %ld\n", strlen(responseFile));
-            printf("body_content: %s\n", body_content);
 
             // Enviar el contenido del archivo en partes
             ssize_t bytes_send_body = send(client_socket, responseBody, strlen(responseBody), 0);
+
             printf("bytes sent body: %ld\n", bytes_send_body);
+
             memset(responseBody, 0, sizeof(responseBody));
             memset(body_content, 0, sizeof(body_content));
+
+            printf("counter : %d\n", counter++);
         }
 
         fclose(file);

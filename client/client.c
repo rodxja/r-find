@@ -171,11 +171,11 @@ void receive_file(int client_socket)
     printf("Header: %s\n----------------\n\n", header);
 
     // TODO : read from response the size of the request and use it to know when to stop reading
-
+    int counter = 0;
     while ((bytes_read = read(client_socket, response, HTTP_RESPONSE_SIZE)) > 0)
     {
 
-        printf("%s\n", response);
+        /* printf("%s\n", response); */
         char name[HTTP_RESPONSE_SIZE] = {0};
         char body[HTTP_RESPONSE_SIZE] = {0};
 
@@ -203,13 +203,16 @@ void receive_file(int client_socket)
             }
         }
 
+        printf("name: %s\n", name);
+
         // create and write to file
 
         createDirectories(name);
 
-        FILE *file = fopen(name, "ab");
+        FILE *file = fopen(name, "a");
         if (file == NULL)
         {
+            printf("%s\n", response);
             perror("error opening file");
             return;
         }
@@ -219,9 +222,9 @@ void receive_file(int client_socket)
 
         // CLEAR BUFFER
         memset(response, 0, sizeof(response));
-
-        // TODO : we must write the content to a file
+        printf("counter : %d\n", counter++);
     }
+    printf("File received\n");
 }
 
 // TODO : print the paths in a legible way to the console
