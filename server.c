@@ -31,18 +31,59 @@
 #define HTTP_VERSION_SIZE 16
 #define PATH_SIZE 512
 #define PATH_PARAMETER_SIZE 128
+#define MAX_STRINGS 100
 #define MAX_CLIENTS 3
 
 int clients[MAX_CLIENTS];
 int numClients = 0;
 
-char **searchFiles(const char *dir, const char *regex, int *matchedFiles);
+typedef struct
+{
+    int numFiles;
+    char list[MAX_STRINGS][PATH_SIZE];
+    regex_t reg;
+} FindPaths;
+
+FindPaths *newFindPaths(const char *regex)
+{
+    FindPaths *findPaths = malloc(sizeof(FindPaths));
+    findPaths->numFiles = 0;
+    // findPaths->reg = {0};
+    //  Compilar el regex
+    if (regcomp(&findPaths->reg, regex, REG_EXTENDED) != 0)
+    {
+        perror("Error compilando el regex");
+        free(findPaths);
+        return NULL;
+    }
+
+    for (int i = 0; i < MAX_STRINGS; i++)
+    {
+        for (int j = 0; j < PATH_SIZE; j++)
+        {
+            findPaths->list[i][j] = '\0';
+        }
+    }
+    return findPaths;
+}
+
+void freeFindPaths(FindPaths *findPaths)
+{
+    regfree(&findPaths->reg);
+    for (int i = 0; i < findPaths->numFiles; i++)
+    {
+        free(findPaths->list[i]);
+    }
+    free(findPaths);
+}
+
+void searchFiles(const char *dir, FindPaths *findPaths);
 void send_file(int client_socket, char *filename);
 char *extract_path_parameter(const char *uri, char *parameterName);
 void paths(int client_socket, const char *uri);
 void files(int client_socket, const char *uri);
 void *handle_client(void *arg);
-void send_files_list(int client_socket, char **fileList, int matchedFiles);
+void send_files_list(int client_socket, FindPaths *findPaths);
 
 int main()
 {
@@ -192,8 +233,6 @@ void *handle_client(void *arg)
 void paths(int client_socket, const char *uri)
 {
 
-    int matchedFiles = 0;
-
     // extract from uri as /paths?path=dir
     // the var dir in order to search
 
@@ -201,25 +240,22 @@ void paths(int client_socket, const char *uri)
     char *regex = extract_path_parameter(uri, "regex");
 
     // Llamar a searchFiles para obtener la lista de archivos
-    char **fileList = searchFiles(dir, regex, &matchedFiles);
+    FindPaths *findPaths = newFindPaths(regex);
 
-    if (fileList != NULL && matchedFiles > 0)
+    searchFiles(dir, findPaths);
+
+    if (findPaths != NULL && findPaths->numFiles > 0)
     {
         // Enviar la lista de archivos a la funcion send_files_list
-        send_files_list(client_socket, fileList, matchedFiles);
-
-        // Liberar la memoria de la lista de archivos
-        for (int i = 0; i < matchedFiles; i++)
-        {
-            free(fileList[i]);
-        }
-        free(fileList);
+        send_files_list(client_socket, findPaths);
     }
     else
     {
         // TODO : send a message to the client that there are no files
         printf("No se encontraron archivos en el directorio %s con el patrón %s\n", dir, regex);
     }
+
+    freeFindPaths(findPaths);
 
     free(dir);
     free(regex);
@@ -235,23 +271,25 @@ void files(int client_socket, const char *uri)
     int matchedFiles = 0;
 
     // Obtener la lista de archivos que coinciden con el patrón
-    char **fileList = searchFiles(dir, regex, &matchedFiles);
+    FindPaths *findPaths = newFindPaths(regex);
 
-    // Iterar sobre el fileList y enviar cada archivo individualmente, llamar a send_file
-    if (matchedFiles > 0)
+    searchFiles(dir, findPaths);
+
+    // Iterar sobre el findPaths y enviar cada archivo individualmente, llamar a send_file
+    if (findPaths->numFiles > 0)
     {
         // Iterar sobre la lista
         for (int i = 0; i < matchedFiles; i++)
         {
-            send_file(client_socket, fileList[i]);
+            send_file(client_socket, findPaths->list[i]);
         }
 
         // Liberar la memoria de la lista de archivos
-        for (int i = 0; i < matchedFiles; i++)
+        for (int i = 0; i < findPaths->numFiles; i++)
         {
-            free(fileList[i]);
+            free(findPaths->list[i]);
         }
-        free(fileList);
+        free(findPaths);
     }
     else
     {
@@ -259,31 +297,27 @@ void files(int client_socket, const char *uri)
     }
 }
 
-char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
+void searchFiles(const char *dir, FindPaths *findPaths)
 {
     DIR *dirp;
     struct dirent *entry;
-    regex_t reg;
+    regex_t reg = {0}; // Initialize the reg variable
     struct stat fileStat;
 
     char path[PATH_SIZE];
 
-    // Inicializar la lista de archivos encontrados
-    char **fileList = NULL;
-
-    // Compilar el regex
-    if (regcomp(&reg, regex, REG_EXTENDED) != 0)
+    if (findPaths == NULL)
     {
-        perror("Error compilando el regex");
-        return NULL;
+        printf("Error: findPaths is NULL\n");
+        return;
     }
 
     // Abrir el directorio
     if ((dirp = opendir(dir)) == NULL)
     {
         perror("Error abriendo el directorio");
-        regfree(&reg);
-        return NULL;
+
+        return;
     }
 
     // Leer entradas en el directorio
@@ -305,38 +339,23 @@ char **searchFiles(const char *dir, const char *regex, int *matchedFiles)
             if (S_ISDIR(fileStat.st_mode))
             {
                 // Si es un directorio, llamar recursivamente a searchFiles
-                char **subDirFiles = searchFiles(path, regex, matchedFiles);
-                if (subDirFiles != NULL)
-                {
-                    // Concatenar la lista de archivos encontrados en el subdirectorio
-                    int subDirCount = *matchedFiles;
-                    fileList = realloc(fileList, subDirCount * sizeof(char *));
-                    for (int i = 0; i < subDirCount; i++)
-                    {
-                        fileList[*matchedFiles - subDirCount + i] = subDirFiles[i];
-                    }
-                    free(subDirFiles);
-                }
+                searchFiles(path, findPaths);
             }
             // Verificar si es un archivo regular
             else if (S_ISREG(fileStat.st_mode))
             {
                 // Si es un archivo regular, verificar con el regex
-                if (regexec(&reg, entry->d_name, 0, NULL, 0) == 0)
+                if (regexec(&findPaths->reg, entry->d_name, 0, NULL, 0) == 0)
                 {
-                    // Agregar el archivo a la lista
-                    fileList = realloc(fileList, (*matchedFiles + 1) * sizeof(char *));
-                    fileList[*matchedFiles] = strdup(path);
-                    (*matchedFiles)++;
+                    strncpy(findPaths->list[findPaths->numFiles], path, PATH_SIZE - 1);
+                    // findPaths->list[findPaths->numFiles][PATH_SIZE - 1] = '\0'; // Ensure null-termination
+                    findPaths->numFiles++;
                 }
             }
         }
     }
 
-    regfree(&reg);
     closedir(dirp);
-
-    return fileList;
 }
 
 void send_file(int client_socket, char *filename)
@@ -378,7 +397,7 @@ void send_file(int client_socket, char *filename)
     fclose(file);
 }
 
-void send_files_list(int client_socket, char **fileList, int matchedFiles)
+void send_files_list(int client_socket, FindPaths *findPaths)
 {
     // Respuesta HTTP con el contenido del cuerpo
     char response[HTTP_RESPONSE_SIZE];
@@ -393,11 +412,11 @@ void send_files_list(int client_socket, char **fileList, int matchedFiles)
 
     int total_size = 0;
 
-    // Iterar sobre el fileList y construir el array JSON
-    for (int i = 0; i < matchedFiles; i++)
+    // Iterar sobre el findPaths y construir el array JSON
+    for (int i = 0; i < findPaths->numFiles; i++)
     {
         // Agregar el nombre de archivo al array JSON
-        strcat(files, fileList[i]);
+        strcat(files, findPaths->list[i]);
         strcat(files, "\n");
 
         // Calcular la longitud de la cadena actual files
