@@ -175,7 +175,7 @@ void receive_file(int client_socket)
     while ((bytes_read = read(client_socket, response, HTTP_RESPONSE_SIZE)) > 0)
     {
 
-        /* printf("%s\n", response); */
+        printf("%s\n", response);
         char name[HTTP_RESPONSE_SIZE] = {0};
         char body[HTTP_RESPONSE_SIZE] = {0};
 
